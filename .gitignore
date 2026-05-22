@@ -1,0 +1,15 @@
+
+__pycache__/
+*.py[cod]
+*$py.class
+.streamlit/secrets.toml
+
+# =========================
+# Environment Variables
+# =========================
+.env
+.env.*
+!.env.example
+.pytest_cache/
+
+
