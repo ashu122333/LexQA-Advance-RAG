@@ -4,22 +4,66 @@ A polished Streamlit demo of a multi-stage RAG pipeline.
 
 from __future__ import annotations
 
+import base64
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
+# Resolve the datasource folder relative to this file, so the app works
+# regardless of the directory Streamlit was launched from.
+DATASOURCE_DIR = (Path(__file__).resolve().parent.parent / "datasource")
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_API_URL = "http://localhost:8000"
+# Read the backend URL from Streamlit secrets when deployed, fall back to
+# localhost for local development. Set BACKEND_URL in:
+#   • Streamlit Cloud  → App settings → Secrets
+#   • Local dev        → frontend/.streamlit/secrets.toml
+try:
+    DEFAULT_API_URL = st.secrets.get("BACKEND_URL", "http://localhost:8000")
+except Exception:
+    DEFAULT_API_URL = "http://localhost:8000"
 APP_TITLE = "LexQA"
 APP_TAGLINE = "Transparent Retrieval-Augmented Generation for Research Literature"
+
+# A short, user-facing description of the corpus. Shown prominently on the
+# chat page so first-time users know what kinds of questions to ask.
+KNOWLEDGE_PITCH = (
+    "LexQA's knowledge base contains **8 foundational research papers on "
+    "Retrieval-Augmented Generation** — including the original RAG paper, "
+    "REALM, Dense Passage Retrieval (DPR), Self-RAG, FLARE, Chain-of-Note, "
+    "the 2023 RAG survey, and the 2024 *Best Practices in RAG* study. "
+    "Ask anything about retrieval, reranking, multi-hop reasoning, "
+    "groundedness, adaptive RAG, or how these techniques compare."
+)
+
+
+@st.cache_data(show_spinner=False)
+def load_pdf_bytes(arxiv_id: str) -> bytes | None:
+    """Read a source PDF off disk. Cached so repeated previews are instant."""
+    path = DATASOURCE_DIR / f"{arxiv_id}.pdf"
+    if not path.exists():
+        return None
+    return path.read_bytes()
+
+
+def pdf_iframe_html(pdf_bytes: bytes, height: int = 720) -> str:
+    """Render a PDF inline by base64-encoding it into a data URL."""
+    b64 = base64.b64encode(pdf_bytes).decode("ascii")
+    return (
+        f'<iframe src="data:application/pdf;base64,{b64}" '
+        f'width="100%" height="{height}" '
+        f'style="border:1px solid #1f2330; border-radius:10px; '
+        f'background:#0E1117;"></iframe>'
+    )
 
 st.set_page_config(
     page_title=f"{APP_TITLE} — Transparent RAG",
@@ -223,6 +267,41 @@ section[data-testid="stSidebar"] { background: #0E1117; border-right: 1px solid 
 .badge.warm  { background: rgba(255,180,84,0.10); color: #FFD79B; border-color: rgba(255,180,84,0.35); }
 .badge.blue  { background: rgba(91,141,239,0.12); color: #B9CCFB; border-color: rgba(91,141,239,0.35); }
 
+/* ---------- pitch / topic-description card ---------- */
+.pitch-card {
+    background: linear-gradient(135deg, rgba(124,92,255,0.10), rgba(46,196,182,0.05));
+    border: 1px solid rgba(124,92,255,0.30);
+    border-radius: 14px;
+    padding: 18px 22px;
+    margin-bottom: 26px;
+}
+.pitch-header {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
+}
+.pitch-icon { font-size: 1.15rem; }
+.pitch-title {
+    font-weight: 600; color: #F4F5FA; font-size: 1.0rem;
+    letter-spacing: -0.01em;
+}
+.pitch-body { color: #C9CFDE; font-size: 0.92rem; line-height: 1.55; }
+.pitch-body b, .pitch-body strong { color: #E6E8EE; }
+.pitch-hint {
+    margin-top: 10px; font-size: 0.80rem; color: #98A0B3;
+    border-top: 1px solid rgba(124,92,255,0.18); padding-top: 8px;
+}
+
+/* ---------- knowledge-base page paper cards ---------- */
+.kb-card {
+    background: #11141C; border: 1px solid #1f2330;
+    border-radius: 14px; padding: 18px 20px; margin-bottom: 14px;
+}
+.kb-title {
+    font-size: 1.05rem; font-weight: 600; color: #F4F5FA;
+    margin-bottom: 4px; line-height: 1.35;
+}
+.kb-meta { font-size: 0.82rem; color: #98A0B3; margin-bottom: 8px; }
+.kb-summary { color: #C9CFDE; font-size: 0.92rem; line-height: 1.55; }
+
 /* ---------- section headings ---------- */
 .section-title {
     font-size: 1.05rem; font-weight: 600; color: #E6E8EE;
@@ -383,7 +462,7 @@ def render_sidebar() -> None:
 
         st.markdown('<div class="section-title">Navigation</div>', unsafe_allow_html=True)
         page = st.radio(
-            "nav", ["Chat", "Architecture", "About"],
+            "nav", ["Chat", "Knowledge Base", "Architecture", "About"],
             label_visibility="collapsed",
             horizontal=False, key="page",
         )
@@ -404,6 +483,10 @@ def render_sidebar() -> None:
 
         st.markdown('<div class="section-title">Knowledge Base · 8 sources</div>',
                     unsafe_allow_html=True)
+        st.caption(
+            "Download any source PDF, or open the **Knowledge Base** page "
+            "for full in-browser previews."
+        )
         for src in SOURCES:
             color = CATEGORY_COLOR.get(src["category"], "#7C5CFF")
             with st.expander(f"{src['title']}", expanded=False):
@@ -414,6 +497,25 @@ def render_sidebar() -> None:
                 )
                 st.caption(f"{src['authors']} · {src['year']} · arXiv:{src['id']}")
                 st.write(src["summary"])
+
+                pdf_bytes = load_pdf_bytes(src["id"])
+                if pdf_bytes:
+                    st.download_button(
+                        "\U0001F4C4  Download PDF",
+                        data=pdf_bytes,
+                        file_name=f"{src['id']}.pdf",
+                        mime="application/pdf",
+                        key=f"dl-sidebar-{src['id']}",
+                        use_container_width=True,
+                    )
+                else:
+                    st.caption(
+                        f":warning: `{src['id']}.pdf` not found in "
+                        f"`datasource/` folder."
+                    )
+                st.markdown(
+                    f"[Open on arXiv ↗](https://arxiv.org/abs/{src['id']})"
+                )
 
         st.markdown('<div class="section-title">Try an example</div>',
                     unsafe_allow_html=True)
@@ -758,8 +860,30 @@ def render_metrics(timings: dict, validation: dict) -> None:
     st.markdown(html, unsafe_allow_html=True)
 
 
+def render_pitch_card() -> None:
+    """A prominent description card that tells the user what the RAG knows
+    about, so they know what kinds of questions to ask."""
+    st.markdown(
+        f"""
+        <div class="pitch-card">
+          <div class="pitch-header">
+            <span class="pitch-icon">\U0001F4DA</span>
+            <span class="pitch-title">What can LexQA answer?</span>
+          </div>
+          <div class="pitch-body">{KNOWLEDGE_PITCH}</div>
+          <div class="pitch-hint">
+            Browse the full corpus on the
+            <b>Knowledge Base</b> page, or download any paper from the sidebar.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_chat_page() -> None:
     render_hero()
+    render_pitch_card()
 
     col_chat, col_pipe = st.columns([1.35, 1], gap="large")
 
@@ -1012,6 +1136,97 @@ def render_architecture_page() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Knowledge Base page — lets users see, download, and preview every source PDF
+# ---------------------------------------------------------------------------
+
+
+def render_knowledge_base_page() -> None:
+    render_hero()
+
+    st.markdown(
+        '<div class="section-title">Knowledge Base &middot; 8 papers</div>',
+        unsafe_allow_html=True,
+    )
+    st.write(
+        "Every answer LexQA produces is grounded in this corpus of 8 "
+        "foundational RAG papers. Open any paper below to **download** it "
+        "or **preview it inline** — so you can see exactly what the system "
+        "is drawing from."
+    )
+
+    # quick category-filter pills
+    categories = ["All"] + sorted({s["category"] for s in SOURCES})
+    selected_cat = st.radio(
+        "Filter by category",
+        categories,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="kb-filter",
+    )
+
+    visible = [s for s in SOURCES if selected_cat in ("All", s["category"])]
+    st.caption(f"Showing **{len(visible)}** of {len(SOURCES)} papers")
+    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+    for src in visible:
+        color = CATEGORY_COLOR.get(src["category"], "#7C5CFF")
+        st.markdown(
+            f"""
+            <div class="kb-card">
+              <div class="kb-title">{src['title']}</div>
+              <div class="kb-meta">
+                <span class='cat-pill' style='background:{color}'>{src['category']}</span>
+                &nbsp;&nbsp;{src['authors']} &middot; {src['year']}
+                &middot; arXiv:{src['id']}
+              </div>
+              <div class="kb-summary">{src['summary']}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        pdf_bytes = load_pdf_bytes(src["id"])
+        c1, c2, c3 = st.columns([1, 1, 2])
+        with c1:
+            if pdf_bytes:
+                st.download_button(
+                    "\U0001F4C4  Download PDF",
+                    data=pdf_bytes,
+                    file_name=f"{src['id']}.pdf",
+                    mime="application/pdf",
+                    key=f"dl-kb-{src['id']}",
+                    use_container_width=True,
+                )
+            else:
+                st.button(
+                    "PDF unavailable", disabled=True,
+                    key=f"dl-missing-{src['id']}", use_container_width=True,
+                )
+        with c2:
+            st.link_button(
+                "Open on arXiv ↗",
+                f"https://arxiv.org/abs/{src['id']}",
+                use_container_width=True,
+            )
+
+        if pdf_bytes:
+            with st.expander("Preview PDF in browser", expanded=False):
+                st.markdown(pdf_iframe_html(pdf_bytes, height=720),
+                            unsafe_allow_html=True)
+                st.caption(
+                    "If the inline viewer is blocked by your browser, "
+                    "use the download button above."
+                )
+        else:
+            st.warning(
+                f"`{src['id']}.pdf` was not found in `datasource/`. "
+                "Place the file there to enable download and preview."
+            )
+
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
 # About page
 # ---------------------------------------------------------------------------
 
@@ -1084,6 +1299,8 @@ render_sidebar()
 page = st.session_state.page
 if page == "Chat":
     render_chat_page()
+elif page == "Knowledge Base":
+    render_knowledge_base_page()
 elif page == "Architecture":
     render_architecture_page()
 else:

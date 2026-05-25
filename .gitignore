@@ -2,7 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
-.streamlit/secrets.toml
+.frontend/streamlit/secrets.toml
 
 # =========================
 # Environment Variables
@@ -11,5 +11,5 @@ __pycache__/
 .env.*
 !.env.example
 .pytest_cache/
-
+.secrets.toml
 

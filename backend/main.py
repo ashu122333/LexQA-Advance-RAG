@@ -1,6 +1,9 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 import time
 
 from rag.inputValidation import is_valid_input
@@ -14,7 +17,11 @@ from rag.outputRewrite import rewrite_response
 
 
 
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(title="LexQA", version="1.6.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,7 +41,8 @@ def health():
 
 
 @app.post("/query")
-def query(req: QueryRequest):
+@limiter.limit("5/minute")
+def query(request: Request, req: QueryRequest):
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
